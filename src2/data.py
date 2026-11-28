@@ -1,11 +1,12 @@
-"""沿用 Weibo21 官方训练和验证划分，只对正文分词。"""
+"""加载 Weibo21 的文本及标签。"""
 
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 
 
 def load_split(path, tokenizer, max_text_tokens):
-    # 只读取原作者提供的可信 pickle，保留原始标签 0=Real、1=Fake。
+    # 读取原作者发布的 pickle，保留原始 0=Real、1=Fake 标签。
     frame = pd.read_pickle(path)
     frame = frame.loc[frame["category"] != "无法确定", ["content", "label"]]
     if frame.empty or not frame["label"].isin((0, 1)).all():
@@ -30,3 +31,11 @@ def collate(rows, pad_id):
         mask[index, -len(ids):] = 1
     return {"input_ids": input_ids, "attention_mask": mask,
             "labels": torch.tensor([label for _, label in rows], dtype=torch.long)}
+
+
+def evaluation_loader(rows, batch_size, collate_fn, rank=0, world_size=1):
+    # 保留单卡的长度排序和批边界，交错分配整批，每条样本只评估一次。
+    ordered = sorted(rows, key=lambda row: len(row[0]))
+    batches = range(0, len(ordered), batch_size)
+    local_rows = [row for start in batches[rank::world_size] for row in ordered[start:start + batch_size]]
+    return DataLoader(local_rows, batch_size=batch_size, collate_fn=collate_fn)
